@@ -163,11 +163,13 @@ class LORAEngineGeneration(object):
     def __init__(self, 
                 base_path,
                 project_path,
+                adapter_path,
                 dataset_name='math_with_reason',
                 device="cuda"):
         self.base_path = base_path
         self.project_path = project_path
-        self.adapter_path = f"{self.project_path}/models/math_with_reason_13bf"
+        # self.adapter_path = f"{self.project_path}/models/math_with_reason_13bf"
+        self.adapter_path = adapter_path
         self.dataset_name = dataset_name
         self.device=device
         self.load_pretrained_network()
@@ -197,6 +199,12 @@ class LORAEngineGeneration(object):
     def load_datasets(self):
         self.train_dataset = Dataset.load_from_disk(f"{self.project_path}/datasets/{self.dataset_name}_train.hf")
         self.validation_dataset = Dataset.load_from_disk(f"{self.project_path}/datasets/{self.dataset_name}_test.hf")
+
+        print("TODO: loading only 40 examples")
+        self.train_dataset = self.train_dataset.select(range(40))
+        self.validation_dataset = self.validation_dataset.select(range(20))
+
+
 
     def create_tokenized_datasets(self):
         tokenize_func = lambda x: self.tokenizer(
@@ -245,6 +253,11 @@ class LORAEngineGeneration(object):
             
             grad_dict={}
             for k, v in self.model.named_parameters():
+
+                if step == 0:
+                    print(k)
+                    print(v.shape)
+
                 if 'lora_A' in k:
                     grad_dict[k]=v.grad.cpu()
                 elif 'lora_B' in k:
@@ -266,6 +279,9 @@ class LORAEngineGeneration(object):
             
             grad_dict={}
             for k, v in self.model.named_parameters():
+                if step == 0:
+                    print(k)
+                    print(v.shape)
                 if 'lora_A' in k:
                     grad_dict[k]=v.grad.cpu()
                 elif 'lora_B' in k:

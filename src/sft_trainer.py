@@ -42,7 +42,7 @@ class ScriptArguments:
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=3e-4, metadata={"help": "the learning rate"})
-    batch_size: Optional[int] = field(default=64, metadata={"help": "the batch size"})
+    batch_size: Optional[int] = field(default=32, metadata={"help": "the batch size"})
     seq_length: Optional[int] = field(default=128, metadata={"help": "Input sequence length"})
     gradient_accumulation_steps: Optional[int] = field(
         default=16, metadata={"help": "the number of gradient accumulation steps"}
@@ -58,6 +58,7 @@ class ScriptArguments:
     use_auth_token: Optional[bool] = field(default=True, metadata={"help": "Use HF auth token to access the model"})
     num_train_epochs: Optional[int] = field(default=10, metadata={"help": "the number of training epochs"})
     max_steps: Optional[int] = field(default=-1, metadata={"help": "the number of training steps"})
+    device: Optional[str] = field(default="cuda:2", metadata={"help": ""})
     save_steps: Optional[int] = field(
         default=100, metadata={"help": "Number of updates steps before two checkpoint saves"}
     )
@@ -65,9 +66,15 @@ class ScriptArguments:
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the model to HF Hub"})
     hub_model_id: Optional[str] = field(default=None, metadata={"help": "The name of the model on HF Hub"})
 
+    # linear, cosine, constant
+    lr_scheduler_type: Optional[str] = field(default=None, metadata={"help": "The name of the model on HF Hub"})
+
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
+
+if script_args.lr_scheduler_type is None:
+    raise ValueError(f"lr_scheduler_type cannot be None")
 
 # Step 1: Load the model
 if script_args.load_in_8bit and script_args.load_in_4bit:
@@ -77,7 +84,11 @@ elif script_args.load_in_8bit or script_args.load_in_4bit:
         load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
     )
     # Copy the model to each device
-    device_map = {"": Accelerator().local_process_index}
+
+
+    # device_map = {"": Accelerator().local_process_index}
+    device_map = {"": int(script_args.device.split(':')[-1])}
+    print("device_map", device_map)
     torch_dtype = torch.bfloat16
 else:
     device_map = None
@@ -85,25 +96,10 @@ else:
     torch_dtype = None
 device_map = 'auto'
 
-model = AutoModelForCausalLM.from_pretrained(
-    script_args.model_name,
-    quantization_config=quantization_config,
-    device_map=device_map,
-    trust_remote_code=script_args.trust_remote_code,
-    torch_dtype=torch_dtype,
-    use_auth_token=script_args.use_auth_token,
-)
-model.config.use_cache = False
-
-# Step 2: Load the dataset
-try:
-    # import pdb; pdb.set_trace()
-    dataset = load_dataset(script_args.dataset_name, split="train")
-except:
-    dataset = load_from_disk(script_args.dataset_name)
-
-# Step 3: Define the training arguments
+# Define the training arguments
 training_args = TrainingArguments(
+    # New arguments
+
     output_dir=script_args.output_dir,
     per_device_train_batch_size=script_args.batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
@@ -116,6 +112,9 @@ training_args = TrainingArguments(
     save_total_limit=script_args.save_total_limit,
     push_to_hub=script_args.push_to_hub,
     hub_model_id=script_args.hub_model_id,
+
+    # New arguments
+    lr_scheduler_type=script_args.lr_scheduler_type,
 )
 
 # Step 4: Define the LoraConfig
@@ -131,6 +130,37 @@ if script_args.use_peft:
 
 else:
     peft_config = None
+
+
+# Load the dataset
+try:
+    # import pdb; pdb.set_trace()
+    dataset = load_dataset(script_args.dataset_name, split="train")
+except:
+    dataset = load_from_disk(script_args.dataset_name)
+
+print("Dataset for training")
+print(dataset)
+
+model = AutoModelForCausalLM.from_pretrained(
+    script_args.model_name,
+    quantization_config=quantization_config,
+    device_map=device_map,
+
+    trust_remote_code=script_args.trust_remote_code,
+    torch_dtype=torch_dtype,
+    use_auth_token=script_args.use_auth_token,
+
+    # New arguments
+    load_in_8bit=script_args.load_in_8bit,
+
+)
+model.config.use_cache = False
+
+N = 2000
+print(f"Selecting the first {N} examples for training")
+dataset = dataset.select(range(N))
+
 
 from transformers import LlamaForCausalLM, LlamaTokenizer, get_linear_schedule_with_warmup, set_seed
 
